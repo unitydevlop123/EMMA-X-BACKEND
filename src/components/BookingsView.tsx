@@ -343,6 +343,11 @@ export const BookingsView: React.FC<BookingsViewProps> = ({
                         <span>Armed Escort</span>
                       </span>
                     )}
+                    {b.promoCode && (
+                      <span className="text-[9px] font-black uppercase tracking-wider text-purple-700 bg-purple-50 px-1.5 py-0.5 rounded border border-purple-200">
+                        {b.promoCode}
+                      </span>
+                    )}
                   </div>
                   <h3 className="font-extrabold text-sm text-slate-900 mt-1 truncate">
                     {b.clientName || 'VIP Client'}
@@ -543,6 +548,17 @@ export const BookingsView: React.FC<BookingsViewProps> = ({
                 <span className="text-slate-400">Armed Escort:</span>
                 <span className="font-bold">{viewingBooking.hasEscort ? 'Yes (Included)' : 'No'}</span>
               </div>
+              {viewingBooking.promoCode && (
+                <div className="flex justify-between py-1 border-b border-slate-100">
+                  <span className="text-slate-400">Promo Code Applied:</span>
+                  <span className="font-bold text-purple-700">
+                    {viewingBooking.promoCode}
+                    {viewingBooking.promoDiscount
+                      ? ` (-₦${Number(viewingBooking.promoDiscount).toLocaleString()})`
+                      : ''}
+                  </span>
+                </div>
+              )}
               <div className="flex justify-between py-1 border-b border-slate-100">
                 <span className="text-slate-400">Total Amount:</span>
                 <span className="font-black text-slate-900">

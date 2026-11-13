@@ -48,10 +48,13 @@ export const PromoCodesView: React.FC<PromoCodesViewProps> = ({
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [newCode, setNewCode] = useState('');
-  const [newDiscount, setNewDiscount] = useState('15% OFF');
-  const [newTarget, setNewTarget] = useState('Luxury SUV & Escort');
-  const [newExpiry, setNewExpiry] = useState('31 Dec 2026');
+  const [discountType, setDiscountType] = useState<'percent' | 'fixed'>('percent');
+  const [discountValue, setDiscountValue] = useState<string>('20');
+  const [expiresAt, setExpiresAt] = useState('2026-12-31');
+  const [minOrderAmount, setMinOrderAmount] = useState<string>('0');
+  const [targetNote, setTargetNote] = useState('');
   const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -88,39 +91,64 @@ export const PromoCodesView: React.FC<PromoCodesViewProps> = ({
   const openAddModal = () => {
     setEditingId(null);
     setNewCode('');
-    setNewDiscount('15% OFF');
-    setNewTarget('Luxury SUV & Escort');
-    setNewExpiry('31 Dec 2026');
+    setDiscountType('percent');
+    setDiscountValue('20');
+    setExpiresAt('2026-12-31');
+    setMinOrderAmount('0');
+    setTargetNote('');
+    setFormError(null);
     setShowModal(true);
   };
 
   const openEditModal = (p: FirestorePromoCode) => {
     setEditingId(p.id);
     setNewCode(p.code);
-    setNewDiscount(p.discount);
-    setNewTarget(p.target);
-    setNewExpiry(p.expiry);
+    setDiscountType(p.discountType);
+    setDiscountValue(String(p.discountValue));
+    setExpiresAt(p.expiresAt || '');
+    setMinOrderAmount(String(p.minOrderAmount || 0));
+    setTargetNote(p.target || '');
+    setFormError(null);
     setShowModal(true);
+  };
+
+  const formatDiscountBadge = (p: FirestorePromoCode) => {
+    if (p.discountType === 'fixed') {
+      return `₦${Number(p.discountValue || 0).toLocaleString()} OFF`;
+    }
+    return `${Number(p.discountValue || 0)}% OFF`;
   };
 
   const handleSavePromo = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newCode.trim()) return;
+    const numericVal = Number(discountValue);
+    if (!Number.isFinite(numericVal) || numericVal <= 0) {
+      setFormError('Please enter a valid discount value greater than 0.');
+      return;
+    }
+    if (discountType === 'percent' && numericVal > 100) {
+      setFormError('Percentage discount cannot exceed 100%.');
+      return;
+    }
+
+    setFormError(null);
     setSaving(true);
 
-    const codeUpper = newCode.trim().toUpperCase();
+    const codeUpper = newCode.trim().toUpperCase().replace(/\s+/g, '');
     const docId = editingId || codeUpper.toLowerCase().replace(/[^a-z0-9]+/g, '-');
     const existing = editingId ? promos.find((p) => p.id === editingId) : undefined;
 
     const payload: FirestorePromoCode = {
       id: docId,
       code: codeUpper,
-      discount: newDiscount.trim(),
-      target: newTarget.trim(),
-      expiry: newExpiry.trim(),
+      discountType,
+      discountValue: numericVal,
+      expiresAt: expiresAt.trim(),
+      minOrderAmount: Math.max(0, Number(minOrderAmount) || 0),
+      target: targetNote.trim(),
       uses: existing?.uses ?? 0,
-      status: existing?.status || 'Active',
-      isActive: (existing?.status || 'Active') === 'Active',
+      isActive: existing ? existing.isActive : true,
     };
 
     const res = await savePromoCode(payload);
@@ -133,29 +161,27 @@ export const PromoCodesView: React.FC<PromoCodesViewProps> = ({
       showToast(editingId ? `Updated ${codeUpper}!` : `Saved ${codeUpper} to Firestore!`);
       setShowModal(false);
     } else {
-      alert(
+      setFormError(
         res.permissionDenied
           ? 'Firestore Permission Denied: Please enable promo_codes in firestore.rules.'
-          : 'Failed to save promo code.'
+          : res.error || 'Failed to save promo code.'
       );
     }
     setSaving(false);
   };
 
   const toggleStatus = async (promo: FirestorePromoCode) => {
-    const nextStatus: 'Active' | 'Expired' =
-      promo.status === 'Active' ? 'Expired' : 'Active';
+    const nextActive = !promo.isActive;
     const updated: FirestorePromoCode = {
       ...promo,
-      status: nextStatus,
-      isActive: nextStatus === 'Active',
+      isActive: nextActive,
     };
     const res = await savePromoCode(updated);
     if (res.ok) {
       setPromos((prev) => prev.map((p) => (p.id === promo.id ? updated : p)));
-      showToast(`${promo.code} marked ${nextStatus}`);
+      showToast(`${promo.code} ${nextActive ? 'Activated' : 'Deactivated'}`);
     } else if (res.permissionDenied) {
-      alert('Firestore Permission Denied on promo_codes.');
+      showToast('Permission denied on promo_codes.');
     }
   };
 
@@ -165,7 +191,7 @@ export const PromoCodesView: React.FC<PromoCodesViewProps> = ({
       setPromos((prev) => prev.filter((p) => p.id !== promo.id));
       showToast(`Deleted ${promo.code}`);
     } else if (res.permissionDenied) {
-      alert('Firestore Permission Denied on promo_codes.');
+      showToast('Permission denied on promo_codes.');
     }
   };
 
@@ -187,7 +213,7 @@ export const PromoCodesView: React.FC<PromoCodesViewProps> = ({
               Promo Codes
             </h1>
             <p className="text-xs text-slate-500 font-medium mt-1">
-              Manage discount codes & perks in Firestore (promo_codes).
+              Live checkout discount codes synced to Firestore (promo_codes).
             </p>
           </div>
         </div>
@@ -239,14 +265,16 @@ export const PromoCodesView: React.FC<PromoCodesViewProps> = ({
         <div className="bg-white rounded-2xl p-8 border text-center text-xs text-slate-400">
           {permDenied
             ? 'Waiting for Firestore promo_codes rule access.'
-            : 'No promo codes found in Firestore promo_codes.'}
+            : 'No promo codes yet. Create a code like EMMAX20 to test live checkout discounts.'}
         </div>
       ) : (
         <div className="space-y-3">
           {promos.map((promo) => (
             <div
               key={promo.id}
-              className="bg-white rounded-2xl p-4 border border-slate-200/70 shadow-sm space-y-2.5"
+              className={`bg-white rounded-2xl p-4 border shadow-sm space-y-2.5 ${
+                promo.isActive ? 'border-slate-200/70' : 'border-slate-200 opacity-65'
+              }`}
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="flex items-center gap-2.5">
@@ -259,7 +287,10 @@ export const PromoCodesView: React.FC<PromoCodesViewProps> = ({
                     </h3>
                     <div className="flex items-center gap-1.5 text-xs text-amber-800 font-extrabold mt-0.5">
                       <Sparkles className="w-3 h-3 text-amber-600" />
-                      <span>{promo.discount}</span>
+                      <span>{formatDiscountBadge(promo)}</span>
+                      <span className="text-[10px] font-semibold text-slate-400">
+                        ({promo.discountType})
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -269,12 +300,12 @@ export const PromoCodesView: React.FC<PromoCodesViewProps> = ({
                     type="button"
                     onClick={() => toggleStatus(promo)}
                     className={`text-[9.5px] font-black uppercase px-2 py-0.5 rounded transition-all ${
-                      promo.status === 'Active'
+                      promo.isActive
                         ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                        : 'bg-slate-100 text-slate-500'
+                        : 'bg-slate-100 text-slate-500 border border-slate-200'
                     }`}
                   >
-                    {promo.status}
+                    {promo.isActive ? 'Active' : 'Inactive'}
                   </button>
                   <button
                     type="button"
@@ -295,14 +326,23 @@ export const PromoCodesView: React.FC<PromoCodesViewProps> = ({
                 </div>
               </div>
 
-              <p className="text-xs text-slate-600 font-medium">{promo.target}</p>
+              {(promo.target || (promo.minOrderAmount ?? 0) > 0) && (
+                <p className="text-xs text-slate-600 font-medium">
+                  {promo.target || 'All vehicles'}
+                  {(promo.minOrderAmount ?? 0) > 0
+                    ? ` · Min order: ₦${Number(promo.minOrderAmount).toLocaleString()}`
+                    : ''}
+                </p>
+              )}
 
               <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[11px] text-slate-500">
                 <span className="flex items-center gap-1">
                   <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Expires {promo.expiry}</span>
+                  <span>
+                    {promo.expiresAt ? `Expires ${promo.expiresAt}` : 'No expiry date'}
+                  </span>
                 </span>
-                <span className="font-bold text-slate-700">{promo.uses} Times Used</span>
+                <span className="font-bold text-slate-700">{promo.uses || 0} Uses</span>
               </div>
             </div>
           ))}
@@ -326,49 +366,90 @@ export const PromoCodesView: React.FC<PromoCodesViewProps> = ({
               </button>
             </div>
 
+            {formError && (
+              <div className="bg-red-50 border border-red-200 text-red-700 text-[11px] font-semibold px-3 py-2 rounded-xl">
+                {formError}
+              </div>
+            )}
+
             <form onSubmit={handleSavePromo} className="space-y-3 text-xs">
               <div>
-                <label className="block font-bold text-slate-700 mb-1">Promo Code</label>
+                <label className="block font-bold text-slate-700 mb-1">Promo Code *</label>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. BENINVIP20"
+                  placeholder="e.g. EMMAX20"
                   value={newCode}
                   onChange={(e) => setNewCode(e.target.value.toUpperCase())}
                   className="w-full border rounded-xl px-3 py-2 font-mono font-bold uppercase text-slate-800"
                 />
               </div>
 
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Discount Amount / %</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. 20% OFF or ₦50,000 OFF"
-                  value={newDiscount}
-                  onChange={(e) => setNewDiscount(e.target.value)}
-                  className="w-full border rounded-xl px-3 py-2 font-bold text-slate-800"
-                />
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Discount Type</label>
+                  <select
+                    value={discountType}
+                    onChange={(e) => setDiscountType(e.target.value as 'percent' | 'fixed')}
+                    className="w-full border rounded-xl px-2.5 py-2 font-bold text-slate-800"
+                  >
+                    <option value="percent">Percent (%)</option>
+                    <option value="fixed">Fixed (₦)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    {discountType === 'percent' ? 'Percent (%)' : 'Amount (₦)'} *
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    min={1}
+                    max={discountType === 'percent' ? 100 : undefined}
+                    placeholder={discountType === 'percent' ? '20' : '50000'}
+                    value={discountValue}
+                    onChange={(e) => setDiscountValue(e.target.value)}
+                    className="w-full border rounded-xl px-3 py-2 font-bold text-slate-800"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    Expires At (Optional)
+                  </label>
+                  <input
+                    type="date"
+                    value={expiresAt}
+                    onChange={(e) => setExpiresAt(e.target.value)}
+                    className="w-full border rounded-xl px-2.5 py-2 text-slate-800"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    Min Order (₦)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    placeholder="0"
+                    value={minOrderAmount}
+                    onChange={(e) => setMinOrderAmount(e.target.value)}
+                    className="w-full border rounded-xl px-2.5 py-2 text-slate-800"
+                  />
+                </div>
               </div>
 
               <div>
-                <label className="block font-bold text-slate-700 mb-1">Target Package / Fleet</label>
+                <label className="block font-bold text-slate-700 mb-1">
+                  Admin Note / Package (Optional)
+                </label>
                 <input
                   type="text"
-                  placeholder="e.g. Luxury SUV & Armed Convoy"
-                  value={newTarget}
-                  onChange={(e) => setNewTarget(e.target.value)}
-                  className="w-full border rounded-xl px-3 py-2 text-slate-800"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Expiry Date</label>
-                <input
-                  type="text"
-                  placeholder="e.g. 31 Dec 2026"
-                  value={newExpiry}
-                  onChange={(e) => setNewExpiry(e.target.value)}
+                  placeholder="e.g. Luxury SUV & Escort VIP Discount"
+                  value={targetNote}
+                  onChange={(e) => setTargetNote(e.target.value)}
                   className="w-full border rounded-xl px-3 py-2 text-slate-800"
                 />
               </div>

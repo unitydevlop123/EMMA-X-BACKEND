@@ -29,6 +29,8 @@ export interface FirestoreReservation {
   chauffeurPhone?: string;
   chauffeurPhoto?: string;
   totalAmount: string | number;
+  promoCode?: string;
+  promoDiscount?: number | string;
   status: ReservationStatus;
   statusLabel?: string;
   hasEscort?: boolean;
@@ -85,33 +87,35 @@ export interface FirestoreSubscriptionPlan {
 export interface FirestorePromoCode {
   id: string;
   code: string;
-  discount: string;
-  target: string;
-  expiry: string;
-  uses: number;
-  status: 'Active' | 'Expired';
-  isActive?: boolean;
+  discountType: 'percent' | 'fixed';
+  discountValue: number;
+  expiresAt?: string;
+  minOrderAmount?: number;
+  target?: string;
+  uses?: number;
+  isActive: boolean;
   updatedAt?: string;
 }
 
 export interface FirestoreReview {
   id: string;
   author: string;
-  company: string;
-  vehicle: string;
+  quote: string;
   rating: number;
-  comment: string;
-  date: string;
-  isVisible: boolean;
+  isActive: boolean;
+  company?: string;
+  vehicle?: string;
+  date?: string;
   updatedAt?: string;
 }
 
+export type FleetAlertSeverity = 'advisory' | 'notice' | 'urgent';
+
 export interface FirestoreFleetAlert {
   id: string;
-  title: string;
+  title?: string;
   message: string;
-  level: 'info' | 'warning' | 'urgent';
-  time: string;
+  severity: FleetAlertSeverity;
   isActive: boolean;
   createdAt?: string;
   updatedAt?: string;
@@ -204,6 +208,8 @@ function parseReservation(id: string, data: any): FirestoreReservation {
     chauffeurPhone: data.chauffeurPhone || '',
     chauffeurPhoto: data.chauffeurPhoto ? normalizeHttpsUrl(data.chauffeurPhoto) : '',
     totalAmount: data.totalAmount ?? data.amount ?? '₦0',
+    promoCode: data.promoCode || '',
+    promoDiscount: data.promoDiscount ?? undefined,
     status,
     statusLabel: data.statusLabel || '',
     hasEscort: Boolean(data.hasEscort || data.escortIncluded),
@@ -601,16 +607,30 @@ export async function deleteSubscriptionPlan(id: string): Promise<FirestoreOpRes
 // E. PROMO CODES, REVIEWS & FLEET ALERTS
 // ============================================================================
 function parsePromoCode(id: string, data: any): FirestorePromoCode {
-  const status = data.status === 'Expired' || data.isActive === false ? 'Expired' : 'Active';
+  const discountType: 'percent' | 'fixed' =
+    data.discountType === 'fixed' ? 'fixed' : 'percent';
+  let discountValue = Number(data.discountValue);
+  if (!Number.isFinite(discountValue) && typeof data.discount === 'string') {
+    const numMatch = data.discount.replace(/,/g, '').match(/\d+/);
+    discountValue = numMatch ? Number(numMatch[0]) : 10;
+  }
+  if (!Number.isFinite(discountValue)) discountValue = 10;
+
+  const isActive =
+    typeof data.isActive === 'boolean'
+      ? data.isActive
+      : data.status !== 'Expired';
+
   return {
     id,
-    code: data.code || id.toUpperCase(),
-    discount: data.discount || '10% OFF',
+    code: String(data.code || id).toUpperCase(),
+    discountType,
+    discountValue,
+    expiresAt: data.expiresAt || data.expiry || '',
+    minOrderAmount: Number(data.minOrderAmount) || 0,
     target: data.target || '',
-    expiry: data.expiry || '',
     uses: Number(data.uses) || 0,
-    status,
-    isActive: status === 'Active',
+    isActive,
     updatedAt: data.updatedAt || '',
   };
 }
@@ -656,21 +676,25 @@ export async function fetchLivePromoCodes(): Promise<{
 
 export async function savePromoCode(promo: FirestorePromoCode): Promise<FirestoreOpResult> {
   try {
-    await setDoc(
-      doc(db, 'promo_codes', promo.id),
-      {
-        id: promo.id,
-        code: promo.code.trim().toUpperCase(),
-        discount: promo.discount.trim(),
-        target: promo.target.trim(),
-        expiry: promo.expiry.trim(),
-        uses: Number(promo.uses) || 0,
-        status: promo.status,
-        isActive: promo.status === 'Active',
-        updatedAt: new Date().toISOString(),
-      },
-      { merge: true }
-    );
+    const payload: Record<string, any> = {
+      id: promo.id,
+      code: promo.code.trim().toUpperCase(),
+      discountType: promo.discountType === 'fixed' ? 'fixed' : 'percent',
+      discountValue: Number(promo.discountValue) || 0,
+      minOrderAmount: Number(promo.minOrderAmount) || 0,
+      isActive: promo.isActive !== false,
+      uses: Number(promo.uses) || 0,
+      updatedAt: new Date().toISOString(),
+    };
+    if (promo.expiresAt && promo.expiresAt.trim()) {
+      payload.expiresAt = promo.expiresAt.trim();
+    } else {
+      payload.expiresAt = '';
+    }
+    if (promo.target && promo.target.trim()) {
+      payload.target = promo.target.trim();
+    }
+    await setDoc(doc(db, 'promo_codes', promo.id), payload, { merge: true });
     return { ok: true };
   } catch (err: any) {
     return { ok: false, permissionDenied: isPermError(err), error: err?.message };
@@ -686,17 +710,21 @@ export async function deletePromoCodeDoc(id: string): Promise<FirestoreOpResult>
   }
 }
 
-// Reviews
+// Reviews: { id, quote, author, rating: 5, isActive: true }
 function parseReview(id: string, data: any): FirestoreReview {
+  const isActive =
+    typeof data.isActive === 'boolean'
+      ? data.isActive
+      : data.isVisible !== false;
   return {
     id,
     author: data.author || 'VIP Client',
+    quote: data.quote || data.comment || '',
+    rating: Number(data.rating) || 5,
+    isActive,
     company: data.company || '',
     vehicle: data.vehicle || '',
-    rating: Number(data.rating) || 5,
-    comment: data.comment || '',
     date: data.date || '',
-    isVisible: data.isVisible !== false,
     updatedAt: data.updatedAt || '',
   };
 }
@@ -742,21 +770,19 @@ export async function fetchLiveReviews(): Promise<{
 
 export async function saveReview(rev: FirestoreReview): Promise<FirestoreOpResult> {
   try {
-    await setDoc(
-      doc(db, 'reviews', rev.id),
-      {
-        id: rev.id,
-        author: rev.author.trim(),
-        company: rev.company.trim(),
-        vehicle: rev.vehicle.trim(),
-        rating: Number(rev.rating) || 5,
-        comment: rev.comment.trim(),
-        date: rev.date.trim(),
-        isVisible: rev.isVisible !== false,
-        updatedAt: new Date().toISOString(),
-      },
-      { merge: true }
-    );
+    const payload: Record<string, any> = {
+      id: rev.id,
+      author: rev.author.trim(),
+      quote: rev.quote.trim(),
+      rating: Number(rev.rating) || 5,
+      isActive: rev.isActive !== false,
+      updatedAt: new Date().toISOString(),
+    };
+    if (rev.company?.trim()) payload.company = rev.company.trim();
+    if (rev.vehicle?.trim()) payload.vehicle = rev.vehicle.trim();
+    if (rev.date?.trim()) payload.date = rev.date.trim();
+
+    await setDoc(doc(db, 'reviews', rev.id), payload, { merge: true });
     return { ok: true };
   } catch (err: any) {
     return { ok: false, permissionDenied: isPermError(err), error: err?.message };
@@ -772,16 +798,21 @@ export async function deleteReviewDoc(id: string): Promise<FirestoreOpResult> {
   }
 }
 
-// Fleet Alerts
+// Fleet Alerts: { id, title?, message, severity: "advisory" | "notice" | "urgent", isActive: true, createdAt }
 function parseFleetAlert(id: string, data: any): FirestoreFleetAlert {
-  const level =
-    data.level === 'urgent' || data.level === 'warning' ? data.level : 'info';
+  const rawSev = String(data.severity || data.level || 'advisory').toLowerCase();
+  const severity: FleetAlertSeverity =
+    rawSev === 'urgent'
+      ? 'urgent'
+      : rawSev === 'notice' || rawSev === 'warning'
+      ? 'notice'
+      : 'advisory';
+
   return {
     id,
     title: data.title || '',
     message: data.message || '',
-    level,
-    time: data.time || 'Just now',
+    severity,
     isActive: data.isActive !== false,
     createdAt: data.createdAt || '',
     updatedAt: data.updatedAt || '',
@@ -831,20 +862,20 @@ export async function fetchLiveFleetAlerts(): Promise<{
 
 export async function saveFleetAlert(alertItem: FirestoreFleetAlert): Promise<FirestoreOpResult> {
   try {
-    await setDoc(
-      doc(db, 'fleet_alerts', alertItem.id),
-      {
-        id: alertItem.id,
-        title: alertItem.title.trim(),
-        message: alertItem.message.trim(),
-        level: alertItem.level,
-        time: alertItem.time,
-        isActive: alertItem.isActive !== false,
-        createdAt: alertItem.createdAt || new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      },
-      { merge: true }
-    );
+    const payload: Record<string, any> = {
+      id: alertItem.id,
+      message: alertItem.message.trim(),
+      severity: alertItem.severity,
+      isActive: alertItem.isActive !== false,
+      createdAt: alertItem.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    if (alertItem.title && alertItem.title.trim()) {
+      payload.title = alertItem.title.trim();
+    } else {
+      payload.title = '';
+    }
+    await setDoc(doc(db, 'fleet_alerts', alertItem.id), payload, { merge: true });
     return { ok: true };
   } catch (err: any) {
     return { ok: false, permissionDenied: isPermError(err), error: err?.message };

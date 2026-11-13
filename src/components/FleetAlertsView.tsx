@@ -6,10 +6,12 @@ import {
   Trash2,
   Eye,
   EyeOff,
+  Edit2,
   AlertTriangle,
   CheckCircle2,
 } from 'lucide-react';
 import {
+  FleetAlertSeverity,
   FirestoreFleetAlert,
   fetchLiveFleetAlerts,
   getCachedFleetAlerts,
@@ -41,11 +43,13 @@ export const FleetAlertsView: React.FC<FleetAlertsViewProps> = ({
   const [permDenied, setPermDenied] = useState<boolean>(Boolean(propPermDenied));
   const [toast, setToast] = useState<string | null>(null);
 
-  const [showAddModal, setShowAddModal] = useState(false);
+  const [showModal, setShowModal] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [newTitle, setNewTitle] = useState('');
   const [newMsg, setNewMsg] = useState('');
-  const [newLevel, setNewLevel] = useState<'info' | 'warning' | 'urgent'>('info');
+  const [newSeverity, setNewSeverity] = useState<FleetAlertSeverity>('advisory');
   const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -79,30 +83,57 @@ export const FleetAlertsView: React.FC<FleetAlertsViewProps> = ({
     }
   }, []);
 
-  const handleCreateAlert = async (e: React.FormEvent) => {
+  const openAddModal = () => {
+    setEditingId(null);
+    setNewTitle('');
+    setNewMsg('');
+    setNewSeverity('advisory');
+    setFormError(null);
+    setShowModal(true);
+  };
+
+  const openEditModal = (alt: FirestoreFleetAlert) => {
+    setEditingId(alt.id);
+    setNewTitle(alt.title || '');
+    setNewMsg(alt.message);
+    setNewSeverity(alt.severity);
+    setFormError(null);
+    setShowModal(true);
+  };
+
+  const handleSaveAlert = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newTitle.trim()) return;
+    if (!newMsg.trim()) return;
+    setFormError(null);
     setSaving(true);
 
+    const existing = editingId ? alerts.find((a) => a.id === editingId) : undefined;
+    const docId = editingId || 'alt_' + Date.now();
+
     const payload: FirestoreFleetAlert = {
-      id: 'alt_' + Date.now(),
+      id: docId,
       title: newTitle.trim(),
       message: newMsg.trim(),
-      level: newLevel,
-      time: 'Just now',
-      isActive: true,
-      createdAt: new Date().toISOString(),
+      severity: newSeverity,
+      isActive: existing ? existing.isActive : true,
+      createdAt: existing?.createdAt || new Date().toISOString(),
     };
 
     const res = await saveFleetAlert(payload);
     if (res.ok) {
-      setAlerts((prev) => [payload, ...prev]);
-      showToast('Broadcasted alert to Firestore!');
-      setShowAddModal(false);
-      setNewTitle('');
-      setNewMsg('');
-    } else if (res.permissionDenied) {
-      alert('Firestore Permission Denied: Please enable fleet_alerts in firestore.rules.');
+      setAlerts((prev) =>
+        editingId
+          ? prev.map((a) => (a.id === docId ? payload : a))
+          : [payload, ...prev]
+      );
+      showToast(editingId ? 'Updated ticker alert!' : 'Broadcasted live to TopHeader ticker!');
+      setShowModal(false);
+    } else {
+      setFormError(
+        res.permissionDenied
+          ? 'Firestore Permission Denied: Please enable fleet_alerts in firestore.rules.'
+          : res.error || 'Failed to save fleet alert.'
+      );
     }
     setSaving(false);
   };
@@ -112,9 +143,9 @@ export const FleetAlertsView: React.FC<FleetAlertsViewProps> = ({
     const res = await saveFleetAlert(updated);
     if (res.ok) {
       setAlerts((prev) => prev.map((a) => (a.id === alt.id ? updated : a)));
-      showToast(updated.isActive ? 'Alert active' : 'Alert cleared/hidden');
+      showToast(updated.isActive ? 'Alert active on ticker' : 'Alert hidden from ticker');
     } else if (res.permissionDenied) {
-      alert('Firestore Permission Denied on fleet_alerts.');
+      showToast('Permission denied on fleet_alerts.');
     }
   };
 
@@ -124,8 +155,20 @@ export const FleetAlertsView: React.FC<FleetAlertsViewProps> = ({
       setAlerts((prev) => prev.filter((a) => a.id !== alt.id));
       showToast('Deleted alert');
     } else if (res.permissionDenied) {
-      alert('Firestore Permission Denied on fleet_alerts.');
+      showToast('Permission denied on fleet_alerts.');
     }
+  };
+
+  const formatDate = (iso?: string) => {
+    if (!iso) return 'Live';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return d.toLocaleDateString('en-GB', {
+      day: '2-digit',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
   };
 
   return (
@@ -146,7 +189,7 @@ export const FleetAlertsView: React.FC<FleetAlertsViewProps> = ({
               Fleet Alerts & Operations Ticker
             </h1>
             <p className="text-xs text-slate-500 font-medium mt-1">
-              Highway security advisories & notices in Firestore (fleet_alerts).
+              Live TopHeader experience ticker notices in Firestore (fleet_alerts).
             </p>
           </div>
         </div>
@@ -176,11 +219,11 @@ export const FleetAlertsView: React.FC<FleetAlertsViewProps> = ({
       <div className="flex gap-2">
         <button
           type="button"
-          onClick={() => setShowAddModal(true)}
+          onClick={openAddModal}
           className="flex-1 py-3 bg-[#f59e0b] hover:bg-amber-600 active:scale-[0.99] text-white font-extrabold text-sm rounded-xl flex items-center justify-center gap-2 shadow-sm transition-all"
         >
           <Plus className="w-4 h-4 stroke-[3]" />
-          <span>Broadcast Fleet Operations Notice</span>
+          <span>Broadcast TopHeader Ticker Alert</span>
         </button>
         <button
           type="button"
@@ -198,7 +241,7 @@ export const FleetAlertsView: React.FC<FleetAlertsViewProps> = ({
         <div className="bg-white rounded-2xl p-8 border text-center text-xs text-slate-400">
           {permDenied
             ? 'Waiting for Firestore fleet_alerts rule access.'
-            : 'No alerts found in Firestore fleet_alerts.'}
+            : 'No active ticker notices. Broadcast an alert to display it in the customer TopHeader ticker bar.'}
         </div>
       ) : (
         <div className="space-y-3">
@@ -208,9 +251,9 @@ export const FleetAlertsView: React.FC<FleetAlertsViewProps> = ({
               className={`bg-white rounded-2xl p-4 border shadow-sm space-y-2 ${
                 !alt.isActive
                   ? 'opacity-60 border-slate-200'
-                  : alt.level === 'urgent'
-                  ? 'border-red-200 bg-red-50/20'
-                  : alt.level === 'warning'
+                  : alt.severity === 'urgent'
+                  ? 'border-red-300 bg-red-50/30'
+                  : alt.severity === 'notice'
                   ? 'border-amber-200 bg-amber-50/20'
                   : 'border-slate-200/70'
               }`}
@@ -219,23 +262,29 @@ export const FleetAlertsView: React.FC<FleetAlertsViewProps> = ({
                 <div className="flex items-center gap-2">
                   <span
                     className={`text-[9.5px] font-black uppercase px-2 py-0.5 rounded border ${
-                      alt.level === 'urgent'
-                        ? 'bg-red-50 text-red-700 border-red-200'
-                        : alt.level === 'warning'
+                      alt.severity === 'urgent'
+                        ? 'bg-red-100 text-red-700 border-red-300'
+                        : alt.severity === 'notice'
                         ? 'bg-amber-50 text-amber-700 border-amber-200'
                         : 'bg-blue-50 text-blue-700 border-blue-200'
                     }`}
                   >
-                    {alt.level === 'urgent'
-                      ? 'Urgent Alert'
-                      : alt.level === 'warning'
-                      ? 'Notice'
-                      : 'Advisory'}
+                    {alt.severity}
                   </span>
-                  <span className="text-[11px] text-slate-400 font-medium">{alt.time}</span>
+                  <span className="text-[11px] text-slate-400 font-medium">
+                    {formatDate(alt.createdAt)}
+                  </span>
                 </div>
 
                 <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => openEditModal(alt)}
+                    className="p-1 text-slate-400 hover:text-[#0d5dd7]"
+                    title="Edit"
+                  >
+                    <Edit2 className="w-3.5 h-3.5" />
+                  </button>
                   <button
                     type="button"
                     onClick={() => handleToggleActive(alt)}
@@ -255,48 +304,59 @@ export const FleetAlertsView: React.FC<FleetAlertsViewProps> = ({
                 </div>
               </div>
 
-              <h3 className="font-extrabold text-sm text-slate-900 leading-snug">{alt.title}</h3>
-              <p className="text-xs text-slate-600 leading-relaxed font-normal">{alt.message}</p>
+              {alt.title && (
+                <h3 className="font-extrabold text-sm text-slate-900 leading-snug">{alt.title}</h3>
+              )}
+              <p className="text-xs text-slate-700 leading-relaxed font-medium">{alt.message}</p>
             </div>
           ))}
         </div>
       )}
 
       {/* Modal */}
-      {showAddModal && (
+      {showModal && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl p-5 max-w-sm w-full space-y-4 shadow-xl">
             <div className="flex items-center justify-between border-b pb-2">
-              <h3 className="font-black text-sm text-slate-900">Broadcast Fleet Alert</h3>
+              <h3 className="font-black text-sm text-slate-900">
+                {editingId ? 'Edit Fleet Alert' : 'Broadcast Fleet Alert'}
+              </h3>
               <button
                 type="button"
-                onClick={() => setShowAddModal(false)}
+                onClick={() => setShowModal(false)}
                 className="text-slate-400 hover:text-slate-600"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <form onSubmit={handleCreateAlert} className="space-y-3 text-xs">
+            {formError && (
+              <div className="bg-red-50 border border-red-200 text-red-700 text-[11px] font-semibold px-3 py-2 rounded-xl">
+                {formError}
+              </div>
+            )}
+
+            <form onSubmit={handleSaveAlert} className="space-y-3 text-xs">
               <div>
-                <label className="block font-bold text-slate-700 mb-1">Notice Level</label>
+                <label className="block font-bold text-slate-700 mb-1">Severity Level</label>
                 <select
-                  value={newLevel}
-                  onChange={(e) => setNewLevel(e.target.value as any)}
+                  value={newSeverity}
+                  onChange={(e) => setNewSeverity(e.target.value as FleetAlertSeverity)}
                   className="w-full border rounded-xl px-3 py-2 font-bold text-slate-800"
                 >
-                  <option value="info">Advisory (General Operational Info)</option>
-                  <option value="warning">Notice (Airport & Convoy Timing)</option>
-                  <option value="urgent">Urgent (Route Diversion & Security)</option>
+                  <option value="advisory">advisory (Standard Ticker Bar)</option>
+                  <option value="notice">notice (Operational Notice)</option>
+                  <option value="urgent">urgent (Red Urgent Ticker Styling)</option>
                 </select>
               </div>
 
               <div>
-                <label className="block font-bold text-slate-700 mb-1">Alert Headline</label>
+                <label className="block font-bold text-slate-700 mb-1">
+                  Title (Optional)
+                </label>
                 <input
                   type="text"
-                  required
-                  placeholder="e.g. Benin Airport VIP Arrival Staging"
+                  placeholder="e.g. Benin Airport VIP Staging"
                   value={newTitle}
                   onChange={(e) => setNewTitle(e.target.value)}
                   className="w-full border rounded-xl px-3 py-2 font-semibold text-slate-800"
@@ -304,11 +364,13 @@ export const FleetAlertsView: React.FC<FleetAlertsViewProps> = ({
               </div>
 
               <div>
-                <label className="block font-bold text-slate-700 mb-1">Operational Message</label>
+                <label className="block font-bold text-slate-700 mb-1">
+                  Ticker Message *
+                </label>
                 <textarea
                   rows={3}
                   required
-                  placeholder="Enter details for drivers, security escorts, and dispatch team..."
+                  placeholder="Message shown in the TopHeader experience ticker bar..."
                   value={newMsg}
                   onChange={(e) => setNewMsg(e.target.value)}
                   className="w-full border rounded-xl px-3 py-2 text-slate-800"
@@ -318,7 +380,7 @@ export const FleetAlertsView: React.FC<FleetAlertsViewProps> = ({
               <div className="flex gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setShowAddModal(false)}
+                  onClick={() => setShowModal(false)}
                   className="flex-1 py-2 rounded-xl border border-slate-200 text-slate-600 font-bold"
                 >
                   Cancel
@@ -328,7 +390,7 @@ export const FleetAlertsView: React.FC<FleetAlertsViewProps> = ({
                   disabled={saving}
                   className="flex-1 py-2 rounded-xl bg-[#f59e0b] text-white font-extrabold hover:bg-amber-600"
                 >
-                  {saving ? 'Saving...' : 'Broadcast Alert'}
+                  {saving ? 'Saving...' : 'Save & Broadcast'}
                 </button>
               </div>
             </form>
