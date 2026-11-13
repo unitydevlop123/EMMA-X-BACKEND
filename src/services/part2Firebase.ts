@@ -1,6 +1,7 @@
 import {
   collection,
   getDocs,
+  getDoc,
   doc,
   setDoc,
   deleteDoc,
@@ -888,5 +889,56 @@ export async function deleteFleetAlertDoc(id: string): Promise<FirestoreOpResult
     return { ok: true };
   } catch (err: any) {
     return { ok: false, permissionDenied: isPermError(err), error: err?.message };
+  }
+}
+
+export const BUILTIN_FALLBACK_ALERTS: FirestoreFleetAlert[] = [
+  {
+    id: 'starter_vip_fleet',
+    title: 'VIP FLEET LIVE',
+    message: 'BENIN VIP CAR RENTAL & LOGISTICS — TOYOTA PRADO, HILUX, TACOMA & SIENNA',
+    severity: 'advisory',
+    isActive: true,
+    createdAt: '2026-11-13T00:02:00.000Z',
+  },
+  {
+    id: 'starter_dispatch',
+    title: '24/7 DISPATCH',
+    message: 'BENIN AIRPORT (BNI) VIP PICKUP & ARMED CONVOY AVAILABLE NOW',
+    severity: 'advisory',
+    isActive: true,
+    createdAt: '2026-11-13T00:01:00.000Z',
+  },
+];
+
+let alertSeedChecked = false;
+
+export async function seedStarterFleetAlertsOnce(): Promise<FirestoreFleetAlert[] | null> {
+  if (alertSeedChecked) return null;
+  alertSeedChecked = true;
+  try {
+    const seedRef = doc(db, 'system_config', 'fleet_alerts_seeded_v1');
+    const seedSnap = await getDoc(seedRef);
+    if (seedSnap.exists()) return null;
+
+    const existingSnap = await getDocs(collection(db, 'fleet_alerts'));
+    if (!existingSnap.empty) {
+      await setDoc(seedRef, { seeded: true, seededAt: new Date().toISOString() }, { merge: true });
+      return null;
+    }
+
+    const now = new Date().toISOString();
+    for (const item of BUILTIN_FALLBACK_ALERTS) {
+      await setDoc(doc(db, 'fleet_alerts', item.id), {
+        ...item,
+        updatedAt: now,
+      });
+    }
+    await setDoc(seedRef, { seeded: true, seededAt: now }, { merge: true });
+    cacheFleetAlerts = BUILTIN_FALLBACK_ALERTS;
+    writeLocalCache(PART2_CACHE_KEYS.fleetAlerts, BUILTIN_FALLBACK_ALERTS);
+    return BUILTIN_FALLBACK_ALERTS;
+  } catch {
+    return null;
   }
 }
