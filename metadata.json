@@ -1,0 +1,6 @@
+{
+  "name": "Emma X Logistics — Benin VIP Car Rental & Chauffeur Fleet",
+  "description": "Exclusive VIP car rental, armored escorts, luxury SUVs, and executive chauffeur fleet services in Benin City, Nigeria.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
