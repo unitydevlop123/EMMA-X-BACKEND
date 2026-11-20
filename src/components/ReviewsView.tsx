@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Star,
   Building2,
@@ -54,6 +54,8 @@ export const ReviewsView: React.FC<ReviewsViewProps> = ({
   const [quote, setQuote] = useState('');
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const submitLockRef = useRef(false);
+  const draftDocIdRef = useRef<string>('');
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -89,6 +91,7 @@ export const ReviewsView: React.FC<ReviewsViewProps> = ({
 
   const openAddModal = () => {
     setEditingId(null);
+    draftDocIdRef.current = `rev_${Date.now()}`;
     setAuthor('');
     setCompany('');
     setVehicle('');
@@ -100,6 +103,7 @@ export const ReviewsView: React.FC<ReviewsViewProps> = ({
 
   const openEditModal = (r: FirestoreReview) => {
     setEditingId(r.id);
+    draftDocIdRef.current = r.id;
     setAuthor(r.author);
     setCompany(r.company || '');
     setVehicle(r.vehicle || '');
@@ -111,40 +115,47 @@ export const ReviewsView: React.FC<ReviewsViewProps> = ({
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitLockRef.current || saving) return;
     if (!author.trim() || !quote.trim()) return;
+    submitLockRef.current = true;
     setFormError(null);
     setSaving(true);
 
-    const docId = editingId || `rev_${Date.now()}`;
-    const existing = editingId ? reviews.find((r) => r.id === editingId) : undefined;
+    try {
+      const docId = editingId || draftDocIdRef.current || `rev_${Date.now()}`;
+      const existing = editingId ? reviews.find((r) => r.id === editingId) : undefined;
 
-    const payload: FirestoreReview = {
-      id: docId,
-      author: author.trim(),
-      quote: quote.trim(),
-      rating: Number(rating) || 5,
-      isActive: existing ? existing.isActive : true,
-      company: company.trim(),
-      vehicle: vehicle.trim(),
-    };
+      const payload: FirestoreReview = {
+        id: docId,
+        author: author.trim(),
+        quote: quote.trim(),
+        rating: Number(rating) || 5,
+        isActive: existing ? existing.isActive : true,
+        company: company.trim(),
+        vehicle: vehicle.trim(),
+      };
 
-    const res = await saveReview(payload);
-    if (res.ok) {
-      setReviews((prev) =>
-        editingId
-          ? prev.map((r) => (r.id === docId ? payload : r))
-          : [payload, ...prev]
-      );
-      showToast(editingId ? 'Updated testimonial!' : 'Published testimonial to Firestore!');
-      setShowModal(false);
-    } else {
-      setFormError(
-        res.permissionDenied
-          ? 'Firestore Permission Denied: Please enable reviews in firestore.rules.'
-          : res.error || 'Failed to save review.'
-      );
+      const res = await saveReview(payload);
+      if (res.ok) {
+        setReviews((prev) => {
+          const exists = prev.some((r) => r.id === docId);
+          return exists
+            ? prev.map((r) => (r.id === docId ? payload : r))
+            : [payload, ...prev];
+        });
+        showToast(editingId ? 'Updated testimonial!' : 'Published testimonial to Firestore!');
+        setShowModal(false);
+      } else {
+        setFormError(
+          res.permissionDenied
+            ? 'Firestore Permission Denied: Please enable reviews in firestore.rules.'
+            : res.error || 'Failed to save review.'
+        );
+      }
+    } finally {
+      setSaving(false);
+      submitLockRef.current = false;
     }
-    setSaving(false);
   };
 
   const handleToggleActive = async (r: FirestoreReview) => {

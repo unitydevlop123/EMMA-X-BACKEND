@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Ticket,
   Plus,
@@ -55,6 +55,7 @@ export const PromoCodesView: React.FC<PromoCodesViewProps> = ({
   const [targetNote, setTargetNote] = useState('');
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const submitLockRef = useRef(false);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -121,6 +122,7 @@ export const PromoCodesView: React.FC<PromoCodesViewProps> = ({
 
   const handleSavePromo = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitLockRef.current || saving) return;
     if (!newCode.trim()) return;
     const numericVal = Number(discountValue);
     if (!Number.isFinite(numericVal) || numericVal <= 0) {
@@ -132,42 +134,48 @@ export const PromoCodesView: React.FC<PromoCodesViewProps> = ({
       return;
     }
 
+    submitLockRef.current = true;
     setFormError(null);
     setSaving(true);
 
-    const codeUpper = newCode.trim().toUpperCase().replace(/\s+/g, '');
-    const docId = editingId || codeUpper.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    const existing = editingId ? promos.find((p) => p.id === editingId) : undefined;
+    try {
+      const codeUpper = newCode.trim().toUpperCase().replace(/\s+/g, '');
+      const docId = editingId || codeUpper.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      const existing = editingId ? promos.find((p) => p.id === editingId) : undefined;
 
-    const payload: FirestorePromoCode = {
-      id: docId,
-      code: codeUpper,
-      discountType,
-      discountValue: numericVal,
-      expiresAt: expiresAt.trim(),
-      minOrderAmount: Math.max(0, Number(minOrderAmount) || 0),
-      target: targetNote.trim(),
-      uses: existing?.uses ?? 0,
-      isActive: existing ? existing.isActive : true,
-    };
+      const payload: FirestorePromoCode = {
+        id: docId,
+        code: codeUpper,
+        discountType,
+        discountValue: numericVal,
+        expiresAt: expiresAt.trim(),
+        minOrderAmount: Math.max(0, Number(minOrderAmount) || 0),
+        target: targetNote.trim(),
+        uses: existing?.uses ?? 0,
+        isActive: existing ? existing.isActive : true,
+      };
 
-    const res = await savePromoCode(payload);
-    if (res.ok) {
-      setPromos((prev) =>
-        editingId
-          ? prev.map((p) => (p.id === docId ? payload : p))
-          : [payload, ...prev]
-      );
-      showToast(editingId ? `Updated ${codeUpper}!` : `Saved ${codeUpper} to Firestore!`);
-      setShowModal(false);
-    } else {
-      setFormError(
-        res.permissionDenied
-          ? 'Firestore Permission Denied: Please enable promo_codes in firestore.rules.'
-          : res.error || 'Failed to save promo code.'
-      );
+      const res = await savePromoCode(payload);
+      if (res.ok) {
+        setPromos((prev) => {
+          const exists = prev.some((p) => p.id === docId);
+          return exists
+            ? prev.map((p) => (p.id === docId ? payload : p))
+            : [payload, ...prev];
+        });
+        showToast(editingId ? `Updated ${codeUpper}!` : `Saved ${codeUpper} to Firestore!`);
+        setShowModal(false);
+      } else {
+        setFormError(
+          res.permissionDenied
+            ? 'Firestore Permission Denied: Please enable promo_codes in firestore.rules.'
+            : res.error || 'Failed to save promo code.'
+        );
+      }
+    } finally {
+      setSaving(false);
+      submitLockRef.current = false;
     }
-    setSaving(false);
   };
 
   const toggleStatus = async (promo: FirestorePromoCode) => {

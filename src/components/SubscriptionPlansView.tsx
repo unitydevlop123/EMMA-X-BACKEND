@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Building2,
   Plus,
@@ -55,6 +55,8 @@ export const SubscriptionPlansView: React.FC<SubscriptionPlansViewProps> = ({
   const [isActive, setIsActive] = useState(true);
   const [saving, setSaving] = useState(false);
   const [deletingPlan, setDeletingPlan] = useState<FirestoreSubscriptionPlan | null>(null);
+  const submitLockRef = useRef(false);
+  const draftDocIdRef = useRef<string>('');
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -87,6 +89,7 @@ export const SubscriptionPlansView: React.FC<SubscriptionPlansViewProps> = ({
     setEditingId(null);
     setTitle('');
     setSubtitle('');
+    draftDocIdRef.current = `plan-${Date.now()}`;
     setMonthlyPrice('₦2,500,000 / mo');
     setBadge('GOLD VIP');
     setVehicleAccess('Toyota Land Cruiser Prado VIP & Hilux Armed Convoy');
@@ -100,6 +103,7 @@ export const SubscriptionPlansView: React.FC<SubscriptionPlansViewProps> = ({
 
   const openEditModal = (p: FirestoreSubscriptionPlan) => {
     setEditingId(p.id);
+    draftDocIdRef.current = p.id;
     setTitle(p.title);
     setSubtitle(p.subtitle);
     setMonthlyPrice(p.monthlyPrice);
@@ -113,46 +117,54 @@ export const SubscriptionPlansView: React.FC<SubscriptionPlansViewProps> = ({
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitLockRef.current || saving) return;
     if (!title.trim()) return;
+    submitLockRef.current = true;
     setSaving(true);
 
-    const docId =
-      editingId ||
-      (title
-        .trim()
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/(^-|-$)/g, '') || `plan-${Date.now()}`);
+    try {
+      const docId =
+        editingId ||
+        (title
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/(^-|-$)/g, '') ||
+          draftDocIdRef.current ||
+          `plan-${Date.now()}`);
 
-    const payload: FirestoreSubscriptionPlan = {
-      id: docId,
-      title: title.trim(),
-      subtitle: subtitle.trim(),
-      monthlyPrice: monthlyPrice.trim(),
-      badge: badge.trim() || 'VIP PASS',
-      popular,
-      vehicleAccess: vehicleAccess.trim(),
-      features: featuresText
-        .split('\n')
-        .map((line) => line.trim())
-        .filter(Boolean),
-      isActive,
-    };
+      const payload: FirestoreSubscriptionPlan = {
+        id: docId,
+        title: title.trim(),
+        subtitle: subtitle.trim(),
+        monthlyPrice: monthlyPrice.trim(),
+        badge: badge.trim() || 'VIP PASS',
+        popular,
+        vehicleAccess: vehicleAccess.trim(),
+        features: featuresText
+          .split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean),
+        isActive,
+      };
 
-    const res = await saveSubscriptionPlan(payload);
-    if (res.ok) {
-      setPlans((prev) => {
-        const exists = prev.some((item) => item.id === docId);
-        return exists
-          ? prev.map((item) => (item.id === docId ? payload : item))
-          : [payload, ...prev];
-      });
-      showToast(editingId ? 'Updated subscription plan!' : 'Added subscription plan!');
-      setShowModal(false);
-    } else {
-      alert('Failed to save plan: ' + (res.error || 'Permission check needed'));
+      const res = await saveSubscriptionPlan(payload);
+      if (res.ok) {
+        setPlans((prev) => {
+          const exists = prev.some((item) => item.id === docId);
+          return exists
+            ? prev.map((item) => (item.id === docId ? payload : item))
+            : [payload, ...prev];
+        });
+        showToast(editingId ? 'Updated subscription plan!' : 'Added subscription plan!');
+        setShowModal(false);
+      } else {
+        showToast('Failed to save plan: ' + (res.error || 'Permission check needed'));
+      }
+    } finally {
+      setSaving(false);
+      submitLockRef.current = false;
     }
-    setSaving(false);
   };
 
   const handleTogglePopular = async (p: FirestoreSubscriptionPlan) => {

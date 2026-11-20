@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ShieldCheck,
   Plus,
@@ -58,6 +58,8 @@ export const ServicesView: React.FC<ServicesViewProps> = ({
   const [progress, setProgress] = useState(0);
   const [saving, setSaving] = useState(false);
   const [deletingService, setDeletingService] = useState<FirestoreServiceItem | null>(null);
+  const submitLockRef = useRef(false);
+  const draftDocIdRef = useRef<string>('');
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -88,6 +90,7 @@ export const ServicesView: React.FC<ServicesViewProps> = ({
 
   const openAddModal = () => {
     setEditingId(null);
+    draftDocIdRef.current = `service-${Date.now()}`;
     setTitle('');
     setDescription('');
     setCtaText('Inquire Escort');
@@ -99,6 +102,7 @@ export const ServicesView: React.FC<ServicesViewProps> = ({
 
   const openEditModal = (s: FirestoreServiceItem) => {
     setEditingId(s.id);
+    draftDocIdRef.current = s.id;
     setTitle(s.title);
     setDescription(s.description);
     setCtaText(s.ctaText);
@@ -110,41 +114,49 @@ export const ServicesView: React.FC<ServicesViewProps> = ({
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitLockRef.current || saving) return;
     if (!title.trim()) return;
+    submitLockRef.current = true;
     setSaving(true);
 
-    const docId =
-      editingId ||
-      (title
-        .trim()
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/(^-|-$)/g, '') || `service-${Date.now()}`);
+    try {
+      const docId =
+        editingId ||
+        (title
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/(^-|-$)/g, '') ||
+          draftDocIdRef.current ||
+          `service-${Date.now()}`);
 
-    const payload: FirestoreServiceItem = {
-      id: docId,
-      title: title.trim(),
-      description: description.trim(),
-      ctaText: ctaText.trim() || 'Inquire Now',
-      imageUrl: imageUrl.trim(),
-      baseRate: baseRate.trim() ? Number(baseRate) : undefined,
-      isActive,
-    };
+      const payload: FirestoreServiceItem = {
+        id: docId,
+        title: title.trim(),
+        description: description.trim(),
+        ctaText: ctaText.trim() || 'Inquire Now',
+        imageUrl: imageUrl.trim(),
+        baseRate: baseRate.trim() ? Number(baseRate) : undefined,
+        isActive,
+      };
 
-    const res = await saveServiceItem(payload);
-    if (res.ok) {
-      setServices((prev) => {
-        const exists = prev.some((item) => item.id === docId);
-        return exists
-          ? prev.map((item) => (item.id === docId ? payload : item))
-          : [payload, ...prev];
-      });
-      showToast(editingId ? 'Updated service in Firestore!' : 'Added service card!');
-      setShowModal(false);
-    } else {
-      alert('Failed to save service: ' + (res.error || 'Permission check needed'));
+      const res = await saveServiceItem(payload);
+      if (res.ok) {
+        setServices((prev) => {
+          const exists = prev.some((item) => item.id === docId);
+          return exists
+            ? prev.map((item) => (item.id === docId ? payload : item))
+            : [payload, ...prev];
+        });
+        showToast(editingId ? 'Updated service in Firestore!' : 'Added service card!');
+        setShowModal(false);
+      } else {
+        showToast('Failed to save service: ' + (res.error || 'Permission check needed'));
+      }
+    } finally {
+      setSaving(false);
+      submitLockRef.current = false;
     }
-    setSaving(false);
   };
 
   const handleToggleActive = async (s: FirestoreServiceItem) => {

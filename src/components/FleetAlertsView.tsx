@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Plus,
   X,
@@ -63,6 +63,8 @@ export const FleetAlertsView: React.FC<FleetAlertsViewProps> = ({
   const [newIsActive, setNewIsActive] = useState<boolean>(true);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const submitLockRef = useRef(false);
+  const draftDocIdRef = useRef<string>('');
 
   const showToast = (msg: string, type: 'success' | 'warn' = 'success') => {
     setToast({ msg, type });
@@ -120,9 +122,12 @@ export const FleetAlertsView: React.FC<FleetAlertsViewProps> = ({
   const usingFallbackPreview = activeAlerts.length === 0;
   const previewItems = usingFallbackPreview ? BUILTIN_FALLBACK_ALERTS : activeAlerts;
   const hasUrgentPreview = previewItems.some((item) => item.severity === 'urgent');
+  const hasNoticePreview =
+    !hasUrgentPreview && previewItems.some((item) => item.severity === 'notice');
 
   const openAddModal = () => {
     setEditingId(null);
+    draftDocIdRef.current = 'alert_' + Date.now();
     setNewTitle('');
     setNewMsg('');
     setNewSeverity('advisory');
@@ -134,6 +139,7 @@ export const FleetAlertsView: React.FC<FleetAlertsViewProps> = ({
 
   const openEditModal = (alt: FirestoreFleetAlert) => {
     setEditingId(alt.id);
+    draftDocIdRef.current = alt.id;
     setNewTitle(alt.title || '');
     setNewMsg(alt.message);
     setNewSeverity(alt.severity);
@@ -144,6 +150,7 @@ export const FleetAlertsView: React.FC<FleetAlertsViewProps> = ({
 
   const handleSaveAlert = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitLockRef.current || saving) return;
     if (!newMsg.trim()) return;
 
     if (newIsActive && activeOtherCount >= MAX_ACTIVE_ALERTS) {
@@ -153,44 +160,50 @@ export const FleetAlertsView: React.FC<FleetAlertsViewProps> = ({
       return;
     }
 
+    submitLockRef.current = true;
     setFormError(null);
     setSaving(true);
 
-    const existing = editingId ? alerts.find((a) => a.id === editingId) : undefined;
-    const docId = editingId || 'alert_' + Date.now();
+    try {
+      const existing = editingId ? alerts.find((a) => a.id === editingId) : undefined;
+      const docId = editingId || draftDocIdRef.current || 'alert_' + Date.now();
 
-    const payload: FirestoreFleetAlert = {
-      id: docId,
-      title: newTitle.trim().toUpperCase(),
-      message: newMsg.trim(),
-      severity: newSeverity,
-      isActive: newIsActive,
-      createdAt: existing?.createdAt || new Date().toISOString(),
-    };
+      const payload: FirestoreFleetAlert = {
+        id: docId,
+        title: newTitle.trim().toUpperCase(),
+        message: newMsg.trim(),
+        severity: newSeverity,
+        isActive: newIsActive,
+        createdAt: existing?.createdAt || new Date().toISOString(),
+      };
 
-    const res = await saveFleetAlert(payload);
-    if (res.ok) {
-      setAlerts((prev) =>
-        editingId
-          ? prev.map((a) => (a.id === docId ? payload : a))
-          : [payload, ...prev]
-      );
-      showToast(
-        newIsActive
-          ? editingId
-            ? 'Updated live TopHeader alert!'
-            : 'Published live to TopHeader ticker!'
-          : 'Saved as Inactive Draft.'
-      );
-      setShowModal(false);
-    } else {
-      setFormError(
-        res.permissionDenied
-          ? 'Firestore Permission Denied: Please enable fleet_alerts in firestore.rules.'
-          : res.error || 'Failed to save fleet alert.'
-      );
+      const res = await saveFleetAlert(payload);
+      if (res.ok) {
+        setAlerts((prev) => {
+          const exists = prev.some((a) => a.id === docId);
+          return exists
+            ? prev.map((a) => (a.id === docId ? payload : a))
+            : [payload, ...prev];
+        });
+        showToast(
+          newIsActive
+            ? editingId
+              ? 'Updated live TopHeader alert!'
+              : 'Published live to TopHeader ticker!'
+            : 'Saved as Inactive Draft.'
+        );
+        setShowModal(false);
+      } else {
+        setFormError(
+          res.permissionDenied
+            ? 'Firestore Permission Denied: Please enable fleet_alerts in firestore.rules.'
+            : res.error || 'Failed to save fleet alert.'
+        );
+      }
+    } finally {
+      setSaving(false);
+      submitLockRef.current = false;
     }
-    setSaving(false);
   };
 
   const handleToggleActive = async (alt: FirestoreFleetAlert) => {
@@ -343,17 +356,33 @@ export const FleetAlertsView: React.FC<FleetAlertsViewProps> = ({
         </div>
 
         {/* Visual replica of TopHeader experience ticker bar on www.emmaxlogistics.com.ng */}
-        <div className="relative overflow-hidden rounded-lg bg-[#050811] border border-slate-700/70 flex items-center h-10">
+        <div
+          className={`relative overflow-hidden rounded-lg border flex items-center h-10 transition-colors ${
+            hasUrgentPreview
+              ? 'bg-red-950/90 border-red-800/70'
+              : hasNoticePreview
+              ? 'bg-orange-950/35 border-orange-800/60'
+              : 'bg-[#050811] border-slate-700/70'
+          }`}
+        >
           {/* Left Sticky Badge */}
           <div
-            className={`relative z-10 h-full px-3 flex items-center gap-1.5 shrink-0 font-black text-[10px] tracking-wider uppercase shadow-md ${
+            className={`relative z-10 h-full px-3 flex items-center gap-1.5 shrink-0 font-black text-[10px] tracking-wider uppercase shadow-md transition-colors ${
               hasUrgentPreview
-                ? 'bg-red-600 text-white'
-                : 'bg-gradient-to-r from-[#f59e0b] to-[#ff6b00] text-slate-950'
+                ? 'bg-[#dc2626] text-white'
+                : hasNoticePreview
+                ? 'bg-[#ff5f00] text-black'
+                : 'bg-[#f59e0b] text-black'
             }`}
           >
             <Megaphone className="w-3.5 h-3.5 stroke-[2.5]" />
-            <span>{hasUrgentPreview ? 'URGENT ALERT' : 'FLEET ALERT'}</span>
+            <span>
+              {hasUrgentPreview
+                ? 'URGENT ALERT'
+                : hasNoticePreview
+                ? 'FLEET NOTICE'
+                : 'FLEET ALERT'}
+            </span>
           </div>
 
           {/* Scrolling Marquee Track */}

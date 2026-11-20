@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Sparkles,
   Plus,
@@ -60,6 +60,8 @@ export const PromoCardsView: React.FC<PromoCardsViewProps> = ({
   const [progress, setProgress] = useState(0);
   const [saving, setSaving] = useState(false);
   const [deletingCard, setDeletingCard] = useState<FirestorePromoCard | null>(null);
+  const submitLockRef = useRef(false);
+  const draftDocIdRef = useRef<string>('');
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -90,6 +92,7 @@ export const PromoCardsView: React.FC<PromoCardsViewProps> = ({
 
   const openAddModal = () => {
     setEditingId(null);
+    draftDocIdRef.current = `promo-${Date.now()}`;
     setTitle('');
     setSubtitle('');
     setCtaText('Hire Now');
@@ -103,6 +106,7 @@ export const PromoCardsView: React.FC<PromoCardsViewProps> = ({
 
   const openEditModal = (c: FirestorePromoCard) => {
     setEditingId(c.id);
+    draftDocIdRef.current = c.id;
     setTitle(c.title);
     setSubtitle(c.subtitle);
     setCtaText(c.ctaText);
@@ -116,48 +120,56 @@ export const PromoCardsView: React.FC<PromoCardsViewProps> = ({
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitLockRef.current || saving) return;
     if (!title.trim()) return;
+    submitLockRef.current = true;
     setSaving(true);
 
-    const docId =
-      editingId ||
-      (title
-        .trim()
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/(^-|-$)/g, '') || `promo-${Date.now()}`);
+    try {
+      const docId =
+        editingId ||
+        (title
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/(^-|-$)/g, '') ||
+          draftDocIdRef.current ||
+          `promo-${Date.now()}`);
 
-    const payload: FirestorePromoCard = {
-      id: docId,
-      title: title.trim(),
-      subtitle: subtitle.trim(),
-      ctaText: ctaText.trim() || 'Hire Now',
-      imageUrl: imageUrl.trim(),
-      badge:
-        badgePrefix || badgeValue || badgeSuffix
-          ? {
-              prefix: badgePrefix.trim(),
-              value: badgeValue.trim(),
-              suffix: badgeSuffix.trim(),
-            }
-          : undefined,
-      isActive,
-    };
+      const payload: FirestorePromoCard = {
+        id: docId,
+        title: title.trim(),
+        subtitle: subtitle.trim(),
+        ctaText: ctaText.trim() || 'Hire Now',
+        imageUrl: imageUrl.trim(),
+        badge:
+          badgePrefix || badgeValue || badgeSuffix
+            ? {
+                prefix: badgePrefix.trim(),
+                value: badgeValue.trim(),
+                suffix: badgeSuffix.trim(),
+              }
+            : undefined,
+        isActive,
+      };
 
-    const res = await savePromoCard(payload);
-    if (res.ok) {
-      setCards((prev) => {
-        const exists = prev.some((item) => item.id === docId);
-        return exists
-          ? prev.map((item) => (item.id === docId ? payload : item))
-          : [payload, ...prev];
-      });
-      showToast(editingId ? 'Updated promo card in Firestore!' : 'Added promo card!');
-      setShowModal(false);
-    } else {
-      alert('Failed to save promo card: ' + (res.error || 'Permission check needed'));
+      const res = await savePromoCard(payload);
+      if (res.ok) {
+        setCards((prev) => {
+          const exists = prev.some((item) => item.id === docId);
+          return exists
+            ? prev.map((item) => (item.id === docId ? payload : item))
+            : [payload, ...prev];
+        });
+        showToast(editingId ? 'Updated promo card in Firestore!' : 'Added promo card!');
+        setShowModal(false);
+      } else {
+        showToast('Failed to save promo card: ' + (res.error || 'Permission check needed'));
+      }
+    } finally {
+      setSaving(false);
+      submitLockRef.current = false;
     }
-    setSaving(false);
   };
 
   const handleToggleActive = async (c: FirestorePromoCard) => {
